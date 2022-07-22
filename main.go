@@ -11,6 +11,18 @@ import (
 var key string = "test"
 
 func main() {
+
+	for {
+		var password string
+		fmt.Scanln(&password)
+
+		if password == "{9F99CF42-73FB-4EB1-80D9-3B5941017E49}" {
+			break
+		}
+	}
+
+	fmt.Println("\033[2J")
+
 	http.HandleFunc("/vc-16252", vc_16252)
 	http.HandleFunc("/vc-16251", vc_16251)
 
