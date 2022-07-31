@@ -3,36 +3,121 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"io"
+	"io/ioutil"
+	"log"
 	"net/http"
+	"os"
 	"strconv"
 )
 
-var key string = "test"
+var LogsFileName string = "Logs.txt"
+var UsersFileName string = "Users.json"
+var Password string = "ed9abdc9911ae8b5819de70ec5c67a85"
+
+var Users = make(map[string]int64)
 
 func main() {
-
 	for {
-		var password string
-		fmt.Scanln(&password)
+		var p string
+		fmt.Scanln(&p)
 
-		if password == "{9F99CF42-73FB-4EB1-80D9-3B5941017E49}" {
+		if p == Password+"." {
 			break
 		}
 	}
 
-	fmt.Println("\033[2J")
+	fmt.Println("\033[2J\033[1;1H")
 
-	http.HandleFunc("/vc-16251", vc_16251)
+	// =========================================
 
-	http.HandleFunc("/set-key/{F86EC25E-3C43-4EBB-8FD4-9988543F36D6}", func(w http.ResponseWriter, r *http.Request) {
+	f, err := os.OpenFile(LogsFileName, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+	if err != nil {
+		log.Fatalf("error opening file: %v", err)
+	}
+	defer f.Close()
+	log.SetOutput(f)
+
+	LoadUsers()
+
+	http.HandleFunc("/login", LoginHandler)
+	http.HandleFunc("/user", UserHandler)
+	http.HandleFunc("/vc", VirtualCurrencyHandler)
+
+	http.ListenAndServe(":8888", nil)
+}
+
+func LoadUsers() {
+	data, err := ioutil.ReadFile(UsersFileName)
+	if err == nil {
+		json.Unmarshal(data, &Users)
+	}
+}
+
+func SaveUsers() {
+	buf, _ := json.MarshalIndent(Users, "", "\t")
+	ioutil.WriteFile(UsersFileName, buf, 0666)
+}
+
+func LoginHandler(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	var p = q.Get("p")
+
+	if p == Password {
+		cookie := http.Cookie{Name: "p", Value: p}
+		w.Header().Add("Set-Cookie", cookie.String())
+		fmt.Fprint(w, "Login Successful")
+	} else {
+		w.WriteHeader(404)
+		fmt.Fprint(w, "404 page not found")
+	}
+}
+
+func UserHandler(w http.ResponseWriter, r *http.Request) {
+	p, err := r.Cookie("p")
+
+	if err == nil && p != nil && p.Value == Password {
 		q := r.URL.Query()
-		key = q.Get("k")
-		fmt.Fprintf(w, "%s", key)
-	})
+		var m = q.Get("m")
+		var k = q.Get("k")
+		var v = q.Get("v")
 
-	http.ListenAndServe(":8081", nil)
+		if m == "" {
+			buf, _ := json.MarshalIndent(Users, "", "\t")
+			fmt.Fprintf(w, "%s", string(buf))
+		} else if value, err := strconv.ParseInt(v, 10, 64); m == "add" && k != "" && err == nil {
+			var oldPoint = Users[k]
+			Users[k] += value
+			if Users[k] < 0 {
+				Users[k] = 0
+			}
+			result := fmt.Sprintf("| %v | point %d -> %d", r.URL, oldPoint, Users[k])
+			log.Print(result)
+			fmt.Fprintf(w, "充值成功 point %d -> %d", oldPoint, Users[k])
+		} else if oldPoint, ok := Users[k]; m == "del" && ok {
+			delete(Users, k)
+			result := fmt.Sprintf("| %v | point %d -> %d", r.URL, oldPoint, Users[k])
+			log.Print(result)
+			fmt.Fprintf(w, "删除成功 point %d -> %d", oldPoint, Users[k])
+		} else if m == "log" {
+			data, err := ioutil.ReadFile(LogsFileName)
+			if err != nil {
+				w.Write([]byte(err.Error()))
+				return
+			}
+			w.Write(data)
+		} else {
+			w.WriteHeader(404)
+			fmt.Fprint(w, "404 page not found")
+		}
+
+		SaveUsers()
+	} else {
+		w.WriteHeader(404)
+		fmt.Fprint(w, "404 page not found")
+	}
 }
 
 func NewRequest(method, url string, body io.Reader) (*http.Request, error) {
@@ -46,27 +131,39 @@ func NewRequest(method, url string, body io.Reader) (*http.Request, error) {
 	return req, err
 }
 
-func vc_16251(w http.ResponseWriter, r *http.Request) {
+func VirtualCurrencyHandler(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 
-	if q.Get("k") == key {
-		url := fmt.Sprintf("https://nba2k22-svc.2ksports.com:22120/nba/2k22/VirtualCurrencyV4/earn?x=%s", q.Get("x"))
+	if point, ok := Users[q.Get("k")]; ok {
+		if point > 0 {
+			url := fmt.Sprintf("https://nba2k22-svc.2ksports.com:22120/nba/2k22/VirtualCurrencyV4/earn?x=%s", q.Get("x"))
 
-		vc_data_16251_copy := make([]byte, len(vc_data_16251))
-		copy(vc_data_16251_copy, vc_data_16251)
+			// 拷贝一份数据
+			vc_data_16251_copy := make([]byte, len(vc_data_16251))
+			copy(vc_data_16251_copy, vc_data_16251)
 
-		c, _ := strconv.ParseInt(q.Get("c"), 10, 64)
-		buf := bytes.NewBuffer(nil)
-		binary.Write(buf, binary.BigEndian, c)
+			// 取存档Id,修改数据中的存档Id
+			c, _ := strconv.ParseInt(q.Get("c"), 10, 64)
+			buf := bytes.NewBuffer(nil)
+			binary.Write(buf, binary.BigEndian, c)
+			copy(vc_data_16251_copy[1240:], buf.Bytes())
 
-		copy(vc_data_16251_copy[1240:], buf.Bytes())
+			// 发送请求
+			req, _ := NewRequest("POST", url, bytes.NewReader(vc_data_16251_copy))
+			resp, _ := http.DefaultClient.Do(req)
 
-		req, _ := NewRequest("POST", url, bytes.NewReader(vc_data_16251_copy))
+			if resp.StatusCode == 500 {
+				// 获取VC成功,扣点
+				Users[q.Get("k")] -= 1
+				SaveUsers()
+			}
 
-		resp, _ := http.DefaultClient.Do(req)
-
-		w.WriteHeader(resp.StatusCode)
-		fmt.Fprintf(w, "%d", resp.StatusCode)
+			// 返回结果
+			w.WriteHeader(resp.StatusCode)
+			fmt.Fprintf(w, "StatusCode:%d Point:%d", resp.StatusCode, Users[q.Get("k")])
+		} else {
+			fmt.Fprintf(w, "Points are used up, please recharge")
+		}
 	} else {
 		fmt.Fprintf(w, "Invalid key")
 	}
