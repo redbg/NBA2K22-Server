@@ -11,13 +11,15 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"time"
 )
 
-var LogsFileName string = "Logs.txt"
-var UsersFileName string = "Users.json"
-var Password string = "ed9abdc9911ae8b5819de70ec5c67a85"
+var LogsFileName string = "NBA2K22.log"
+var UsersFileName string = "NBA2K22.json"
+var Password string = "fsjs"
 
 var Users = make(map[string]int64)
+var SteamUsers = make(map[string]string)
 
 func main() {
 	for {
@@ -33,21 +35,32 @@ func main() {
 
 	// =========================================
 
+	// 加载用户数据
+	LoadUsers()
+	// 定期保存用户数据
+	go SaveUsersGoroutine()
+
+	// =========================================
+
 	f, err := os.OpenFile(LogsFileName, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
 	if err != nil {
 		log.Fatalf("error opening file: %v", err)
 	}
 	defer f.Close()
-	log.SetOutput(f)
+	log.SetFlags(0)
+	log.SetOutput(&logWriter{Output: f})
 
-	LoadUsers()
+	// =========================================
+	http.HandleFunc("/2k22/admin", NBA2K22_Admin_Handler)
+	http.HandleFunc("/2k22/v1/login", NBA2K22_Login_Handler)
+	http.HandleFunc("/2k22/v1/vc", NBA2K22_VC_Handler)
+	http.HandleFunc("/2k22/v1/sell", NBA2K22_Sell_Handler)
 
-	http.HandleFunc("/login", LoginHandler)
-	http.HandleFunc("/user", UserHandler)
-	http.HandleFunc("/vc", VirtualCurrencyHandler)
-
-	http.ListenAndServe(":8888", nil)
+	// http.ListenAndServe("127.0.0.1:8888", nil)
+	http.ListenAndServe(":80", nil)
 }
+
+// ====================================================================================================
 
 func LoadUsers() {
 	data, err := ioutil.ReadFile(UsersFileName)
@@ -61,47 +74,50 @@ func SaveUsers() {
 	ioutil.WriteFile(UsersFileName, buf, 0666)
 }
 
-func LoginHandler(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	var p = q.Get("p")
-
-	if p == Password {
-		cookie := http.Cookie{Name: "p", Value: p}
-		w.Header().Add("Set-Cookie", cookie.String())
-		fmt.Fprint(w, "Login Successful")
-	} else {
-		w.WriteHeader(404)
-		fmt.Fprint(w, "404 page not found")
+func SaveUsersGoroutine() {
+	for range time.Tick(600 * time.Second) {
+		SaveUsers()
 	}
 }
 
-func UserHandler(w http.ResponseWriter, r *http.Request) {
-	p, err := r.Cookie("p")
+// ====================================================================================================
 
-	if err == nil && p != nil && p.Value == Password {
-		q := r.URL.Query()
-		var m = q.Get("m")
-		var k = q.Get("k")
-		var v = q.Get("v")
+func NBA2K22_Admin_Handler(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	var m = q.Get("m") // 功能
+	var k = q.Get("k") // 卡密
+	var v = q.Get("v") // 数值
+	var p = q.Get("p") // 管理员密码
+	p2, err := r.Cookie("p")
 
-		if m == "" {
+	if p == Password || (err == nil && p2 != nil && p2.Value == Password) {
+
+		// Set-Cookie
+		if p == Password {
+			cookie := http.Cookie{Name: "p", Value: p}
+			w.Header().Add("Set-Cookie", cookie.String())
+		}
+
+		// 功能
+		if m == "" || m == "Users" {
 			buf, _ := json.MarshalIndent(Users, "", "\t")
-			fmt.Fprintf(w, "%s", string(buf))
-		} else if value, err := strconv.ParseInt(v, 10, 64); m == "add" && k != "" && err == nil {
+			fmt.Fprint(w, string(buf))
+		} else if m == "SteamUsers" {
+			buf, _ := json.MarshalIndent(SteamUsers, "", "\t")
+			fmt.Fprint(w, string(buf))
+		} else if value, err := strconv.ParseInt(v, 10, 64); m == "Add" && k != "" && err == nil {
 			var oldPoint = Users[k]
 			Users[k] += value
 			if Users[k] < 0 {
 				Users[k] = 0
 			}
-			result := fmt.Sprintf("| %v | point %d -> %d", r.URL, oldPoint, Users[k])
-			log.Print(result)
-			fmt.Fprintf(w, "充值成功 point %d -> %d", oldPoint, Users[k])
-		} else if oldPoint, ok := Users[k]; m == "del" && ok {
+			log.Printf("%s | %v | Point %d -> %d", r.RemoteAddr, r.URL, oldPoint, Users[k])
+			fmt.Fprintf(w, "充值成功 Point %d -> %d", oldPoint, Users[k])
+		} else if oldPoint, ok := Users[k]; m == "Del" && ok {
 			delete(Users, k)
-			result := fmt.Sprintf("| %v | point %d -> %d", r.URL, oldPoint, Users[k])
-			log.Print(result)
-			fmt.Fprintf(w, "删除成功 point %d -> %d", oldPoint, Users[k])
-		} else if m == "log" {
+			log.Printf("%s | %v | Point %d -> %d", r.RemoteAddr, r.URL, oldPoint, Users[k])
+			fmt.Fprintf(w, "删除成功 Point %d -> %d", oldPoint, Users[k])
+		} else if m == "Log" {
 			data, err := ioutil.ReadFile(LogsFileName)
 			if err != nil {
 				w.Write([]byte(err.Error()))
@@ -113,12 +129,15 @@ func UserHandler(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprint(w, "404 page not found")
 		}
 
+		// 保存用户配置
 		SaveUsers()
 	} else {
 		w.WriteHeader(404)
 		fmt.Fprint(w, "404 page not found")
 	}
 }
+
+// ====================================================================================================
 
 func NewRequest(method, url string, body io.Reader) (*http.Request, error) {
 	req, err := http.NewRequest(method, url, body)
@@ -131,36 +150,135 @@ func NewRequest(method, url string, body io.Reader) (*http.Request, error) {
 	return req, err
 }
 
-func VirtualCurrencyHandler(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
+// ====================================================================================================
 
-	if point, ok := Users[q.Get("k")]; ok {
+func NBA2K22_Login_Handler(w http.ResponseWriter, r *http.Request) {
+	var q = r.URL.Query()
+	var k = q.Get("k")
+	var x = q.Get("x")
+	var SteamUser = q.Get("SteamUser")
+
+	if point, ok := Users[k]; ok {
+		w.Header().Add("Point", strconv.FormatInt(point, 10))
+
 		if point > 0 {
-			url := fmt.Sprintf("https://nba2k22-svc.2ksports.com:22120/nba/2k22/VirtualCurrencyV4/earn?x=%s", q.Get("x"))
+			// Save SteamUser
+			if SteamUsers[SteamUser] != x {
+				SteamUsers[SteamUser] = x
+				log.Printf("%s | %v | Point %d", r.RemoteAddr, r.URL, point)
+			}
 
+			fmt.Fprintf(w, "Login Successful | Point %d", point)
+		} else {
+			fmt.Fprintf(w, "Points are used up, please recharge")
+		}
+	} else {
+		fmt.Fprintf(w, "Invalid key")
+	}
+}
+
+// ====================================================================================================
+
+func NBA2K22_Sell_Handler(w http.ResponseWriter, r *http.Request) {
+	var q = r.URL.Query()
+	var k = q.Get("k") // 卡密
+	var x = q.Get("x")
+	var SteamUser = q.Get("SteamUser")
+	var sell = q.Get("sell")
+
+	sell = fmt.Sprintf("{\"sell\":[%s]}", sell)
+
+	if point, ok := Users[k]; ok {
+		w.Header().Add("Point", strconv.FormatInt(point, 10))
+		if point > 0 {
+			// 拷贝一份数据
+			sell_data_copy := make([]byte, len(sell_data))
+			copy(sell_data_copy, sell_data)
+
+			// set sellString len
+			buf := bytes.NewBuffer(nil)
+			binary.Write(buf, binary.BigEndian, int64(len(sell)+1))
+			copy(sell_data_copy[8:], buf.Bytes())
+
+			sell_data_copy = append(sell_data_copy, []byte(sell)...)
+			sell_data_copy = append(sell_data_copy, 0x00)
+
+			// 字节对齐
+			t := len(sell_data_copy) % 16
+			if t > 0 {
+				sell_data_copy = append(sell_data_copy, bytes.Repeat([]byte{0x00}, 16-t)...)
+			}
+
+			// 发送请求
+			url := fmt.Sprintf("https://nba2k22-svc.2ksports.com:22140/nba/2k22/MyTeamV7/user_card_bulk_actions?x=%s", x)
+			req, _ := NewRequest("POST", url, bytes.NewReader(sell_data_copy))
+			resp, _ := http.DefaultClient.Do(req)
+
+			if resp.ContentLength > 100 {
+				// 扣点
+				Users[k] -= 1
+				// Save SteamUser
+				SteamUsers[SteamUser] = x
+
+				log.Printf("%s | %v | Point %d -> %d", r.RemoteAddr, r.URL, point, Users[k])
+				fmt.Fprintf(w, "Sell Success | Point:%d -> %d", point, Users[k])
+			} else {
+				fmt.Fprintf(w, "Sell Failure")
+			}
+		} else {
+			fmt.Fprintf(w, "Points are used up, please recharge")
+		}
+	} else {
+		fmt.Fprintf(w, "Invalid key")
+	}
+}
+
+var sell_data = []byte{
+	0x5d, 0x92, 0xc8, 0xf1, 0x6e, 0x46, 0x75, 0x2f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // sellString len + 1
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+}
+
+// ====================================================================================================
+
+func NBA2K22_VC_Handler(w http.ResponseWriter, r *http.Request) {
+	var q = r.URL.Query()
+	var k = q.Get("k") // 卡密
+	var x = q.Get("x")
+	var SteamUser = q.Get("SteamUser")
+	var c = q.Get("c") // 存档Id
+
+	if point, ok := Users[k]; ok {
+		w.Header().Add("Point", strconv.FormatInt(point, 10))
+		if point > 0 {
 			// 拷贝一份数据
 			vc_data_16251_copy := make([]byte, len(vc_data_16251))
 			copy(vc_data_16251_copy, vc_data_16251)
 
 			// 取存档Id,修改数据中的存档Id
-			c, _ := strconv.ParseInt(q.Get("c"), 10, 64)
+			c, _ := strconv.ParseInt(c, 10, 64)
 			buf := bytes.NewBuffer(nil)
 			binary.Write(buf, binary.BigEndian, c)
 			copy(vc_data_16251_copy[1240:], buf.Bytes())
 
 			// 发送请求
+			url := fmt.Sprintf("https://nba2k22-svc.2ksports.com:22120/nba/2k22/VirtualCurrencyV4/earn?x=%s", x)
 			req, _ := NewRequest("POST", url, bytes.NewReader(vc_data_16251_copy))
 			resp, _ := http.DefaultClient.Do(req)
 
 			if resp.StatusCode == 500 {
 				// 获取VC成功,扣点
-				Users[q.Get("k")] -= 1
-				SaveUsers()
+				Users[k] -= 1
+
+				// Save SteamUser
+				if SteamUsers[SteamUser] != x {
+					SteamUsers[SteamUser] = x
+					log.Printf("%s | %v | Point %d -> %d", r.RemoteAddr, r.URL, point, Users[k])
+				}
 			}
 
 			// 返回结果
-			w.WriteHeader(resp.StatusCode)
-			fmt.Fprintf(w, "StatusCode:%d Point:%d", resp.StatusCode, Users[q.Get("k")])
+			// w.WriteHeader(resp.StatusCode)
+			fmt.Fprintf(w, "code:%d | Point %d -> %d", resp.StatusCode, point, Users[k])
 		} else {
 			fmt.Fprintf(w, "Points are used up, please recharge")
 		}
@@ -270,4 +388,14 @@ var vc_data_16251 = []byte{
 	0xfd, 0xc5, 0xbd, 0xfd, 0x3d, 0x9e, 0x50, 0x89, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x39,
 	0xfd, 0xd9, 0x71, 0x56, 0xb7, 0xea, 0x1c, 0xd0, 0x3f, 0x80, 0x00, 0x00, 0x83, 0x02, 0x00, 0x59,
 	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+}
+
+type logWriter struct {
+	Output io.Writer
+}
+
+func (writer *logWriter) Write(bytes []byte) (int, error) {
+	s := time.Now().In(time.FixedZone("CST", 8*3600)).Format("2006-01-02 15:04:05 | ") + string(bytes)
+	writer.Output.Write([]byte(s))
+	return fmt.Print(s)
 }
