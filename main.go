@@ -212,7 +212,12 @@ func NBA2K22_Sell_Handler(w http.ResponseWriter, r *http.Request) {
 			// 发送请求
 			url := fmt.Sprintf("https://nba2k22-svc.2ksports.com:22140/nba/2k22/MyTeamV7/user_card_bulk_actions?x=%s", x)
 			req, _ := NewRequest("POST", url, bytes.NewReader(sell_data_copy))
-			resp, _ := http.DefaultClient.Do(req)
+			resp, err := http.DefaultClient.Do(req)
+
+			if err != nil {
+				fmt.Fprintf(w, "Error")
+				return
+			}
 
 			if resp.ContentLength > 100 {
 				// 扣点
@@ -263,7 +268,12 @@ func NBA2K22_VC_Handler(w http.ResponseWriter, r *http.Request) {
 			// 发送请求
 			url := fmt.Sprintf("https://nba2k22-svc.2ksports.com:22120/nba/2k22/VirtualCurrencyV4/earn?x=%s", x)
 			req, _ := NewRequest("POST", url, bytes.NewReader(vc_data_16251_copy))
-			resp, _ := http.DefaultClient.Do(req)
+			resp, err := http.DefaultClient.Do(req)
+
+			if err != nil {
+				fmt.Fprintf(w, "Error")
+				return
+			}
 
 			if resp.StatusCode == 500 {
 				// 获取VC成功,扣点
