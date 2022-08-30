@@ -34,17 +34,6 @@ type SteamUser struct {
 var SteamUsers = make(map[string]SteamUser)
 
 func main() {
-	for {
-		var p string
-		fmt.Scanln(&p)
-
-		if p == Password+"." {
-			break
-		}
-	}
-
-	fmt.Println("\033[2J\033[1;1H")
-
 	// =========================================
 
 	// 加载用户数据
@@ -69,8 +58,7 @@ func main() {
 	http.HandleFunc("/2k22/v1/SteamUser", NBA2K22_SteamUser_Handler)
 	http.HandleFunc("/2k22/v1/SteamUsers", NBA2K22_SteamUsers_Handler)
 
-	// http.ListenAndServe("127.0.0.1:8888", nil)
-	http.ListenAndServe(":80", nil)
+	http.ListenAndServe("127.0.0.1:8080", nil)
 }
 
 // ====================================================================================================
